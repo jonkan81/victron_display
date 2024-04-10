@@ -1,0 +1,285 @@
+esp32:
+  board: wemos_d1_mini32
+esphome:
+  name: victrondisplay
+
+logger:
+  level: DEBUG
+  #level: NONE
+
+wifi:
+  ssid: !secret ssid
+  password: !secret ssid_pwd
+
+mqtt:
+  broker: signalk.local
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+
+external_components:
+  - source: github://Fabian-Schmidt/esphome-victron_ble
+  - source: github://bearpawmaxim/esphome@pr3625fix
+    components: [gc9a01]
+
+spi:
+  mosi_pin: GPIO23
+  clk_pin: GPIO18
+
+font:
+  - file: "gfonts://Roboto"
+    id: roboto
+    size: 20
+  - file: "gfonts://Roboto"
+    id: roboto_big
+    size: 24
+  - file: 'materialdesignicons-webfont.ttf'
+    id: pictograms
+    size: 50
+    glyphs: [
+      '󰂎',
+      '󱊡', #F12A1
+      '󱊢', #F12A2
+      '󱊣', #F12A3
+      '󱊤',
+      '󱊥',
+      '󱊦',
+      '󰢟',
+      '󰂑',
+      ]
+  - file: 'materialdesignicons-webfont.ttf'
+    id: pictograms_small
+    size: 24
+    glyphs: [
+      '󰇺',
+      '󱐋'
+      ]
+
+# GPIO output does not work in combination with BLE and WIFI for some reason
+#output:
+#  - platform: ledc
+#    pin: GPIO17
+#    id: backlight
+
+#light:
+#  - platform: monochromatic
+#    output: backlight
+#    id: light_0
+#    internal: true
+#    restore_mode: ALWAYS_ON
+
+#binary_sensor:
+#  - platform: gpio
+#    pin: 
+#      number: 33
+#      mode:
+#        input: true
+#        pullup: true
+#      inverted: true
+#    id: light_0_touch
+#    on_click:
+#      then:
+#        - if:
+#            condition:
+#              light.is_off: light_0
+#            then:
+#              light.turn_on: 
+#                id: light_0
+#                brightness: 1.0
+#            else:
+#              light.turn_off: light_0
+
+esp32_ble_tracker:
+
+victron_ble:
+ - id: SmartShunt
+   mac_address: !secret smartshunt_mac
+   bindkey: !secret smartshunt_bindkey
+   on_message: 
+     then:
+      - mqtt.publish_json:
+          topic: esphome/smartshunt
+          payload: |-
+              root["time_to_go"] = id(ttg).state;
+              root["battery_voltage"] = id(voltage).state;
+              root["aux_voltage"] = id(aux).state;
+              root["current"] = id(current).state;
+              root["consumed_ah"] = id(consumed).state;
+              root["soc"] = id(soc).state;
+
+dallas:
+  - pin: 27
+
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal Sensor"
+    id: wifisensor
+    update_interval: 60s
+    on_value:
+      then:
+       - mqtt.publish_json:
+          topic: esphome/wifi
+          payload: |-
+              root["wifistrength"] = id(wifisensor).state;
+  # MySmartShunt
+  - platform: victron_ble
+    victron_ble_id: SmartShunt
+    name: "Time remaining"
+    type: TIME_TO_GO
+    id: ttg
+  - platform: victron_ble
+    victron_ble_id: SmartShunt
+    name: "Battery voltage"
+    type: BATTERY_VOLTAGE
+    id: voltage
+  - platform: victron_ble
+    victron_ble_id: SmartShunt
+    name: "Starter Battery"
+    # AUX_VOLTAGE or MID_VOLTAGE or TEMPERATURE.
+    # Depending on configuration of SmartShunt.
+    type: AUX_VOLTAGE
+    id: aux
+  - platform: victron_ble
+    victron_ble_id: SmartShunt
+    name: "Current"
+    type: BATTERY_CURRENT
+    id: current
+  - platform: victron_ble
+    victron_ble_id: SmartShunt
+    name: "Consumed Ah"
+    type: CONSUMED_AH
+    id: consumed
+  - platform: victron_ble
+    victron_ble_id: SmartShunt
+    name: "State of charge"
+    type: STATE_OF_CHARGE
+    id: soc
+  - platform: pulse_counter
+    pin: 12
+    unit_of_measurement: 'hz'
+    name: 'Engine revolutions'
+    id: engine_rev
+    filters:
+      - multiply: 0.016667
+    on_value:
+      then:
+       - mqtt.publish_json:
+          topic: esphome/enginerev
+          payload: |-
+              root["engine_rev"] = id(engine_rev).state;
+  - platform: dallas
+    address: 0x1a3c01d075212228
+    name: "Engine room temp"
+    id: engineroom_temp
+    on_value:
+      then:
+       - mqtt.publish_json:
+          topic: esphome/engineroomtemp
+          payload: |-
+              root["temp"] = id(engineroom_temp).state;
+
+image:
+  - file: mdi:home-lightning-bolt-outline
+    id: house
+    resize: 24x24
+
+display:
+- platform: gc9a01
+  reset_pin: GPIO26
+  cs_pin: GPIO16
+  dc_pin: GPIO19
+  rotation: 0
+  lambda: |-
+    //it.image(0, 0, id(background));
+
+    auto red = Color(255, 0, 0);
+    auto light_blue = Color(135, 237, 232);
+    auto green = Color(0, 255, 0);
+    auto yellow = Color(255, 255, 0);
+    auto orange = Color(255, 170, 43);
+    auto white = Color(255, 255, 255);
+    auto purple = Color(97, 15, 219);
+    auto grey = Color(175, 175, 175);
+    auto black = Color(0,0,0);
+    //auto PI = 3.14159265359;
+    
+
+    it.circle(120,120, 84, grey);
+
+    float angle1 = 150*PI/180;
+    float angle2 = 390*PI/180;
+    auto x1 = 120 + (84 * (cos(angle1)));
+    auto y1 = 120 + (84 * (sin(angle1)));
+    auto x2 = 120 + (84 * (cos(angle2)));
+    auto y2 = 120 + (84 * (sin(angle2)));
+    it.filled_rectangle(x1, y1,x2, y2, black);
+
+    for(int i = 8; i <= 16; i += 2) {
+       float volt = i;
+       float angle = (150+(volt - 8)/8*240)*PI/180;
+       auto x1 = 120 + (100 * (cos(angle)));
+       auto y1 = 120 + (100 * (sin(angle)));
+       auto x2 = 120 + (120 * (cos(angle)));
+       auto y2 = 120 + (120 * (sin(angle)));
+
+       it.printf(x1,y1, id(roboto),grey, TextAlign::CENTER, "%.0i", i);
+    }
+
+    for(int i = 9; i <= 15; i += 2) {
+       float volt = i;
+       float angle = (150+(volt - 8)/8*240)*PI/180;
+       auto x1 = 120 + (100 * (cos(angle)));
+       auto y1 = 120 + (100 * (sin(angle)));
+       it.filled_circle(x1, y1, 3, red);
+    }
+    
+    float volt = id(voltage).state;
+    if(isnan(volt) || volt < 8) {
+      volt = isnan(volt) ? 0 : volt;
+    } else {
+      float angle = (150+(volt - 8)/8*240)*PI/180;
+      float angleOuter1 = (150+(volt - 7.95)/8*240)*PI/180;
+      float angleOuter2 = (150+(volt - 8.05)/8*240)*PI/180;
+      x1 = 120 + (83 * (cos(angle)));
+      y1 = 120 + (83 * (sin(angle)));
+      x2 = 120 + (120 * (cos(angleOuter1)));
+      y2 = 120 + (120 * (sin(angleOuter1)));
+      auto x3 = 120 + (120 * (cos(angleOuter2)));
+      auto y3 = 120 + (120 * (sin(angleOuter2)));
+      it.filled_triangle(x1, y1, x2, y2, x3, y3, light_blue);
+    }
+
+    float auxVolt = id(aux).state;
+    if(isnan(auxVolt) || auxVolt < 8) {
+       auxVolt = isnan(auxVolt) ? 0 : auxVolt;
+    } else {
+      auxVolt = isnan(auxVolt) ? 0 : auxVolt;
+      float angle = (150+(volt - 8)/8*240)*PI/180;
+      float angleOuter1 = (150+(auxVolt - 7.95)/8*240)*PI/180;
+      float angleOuter2 = (150+(auxVolt - 8.05)/8*240)*PI/180;
+      x1 = 120 + (83 * (cos(angle)));
+      y1 = 120 + (83 * (sin(angle)));
+      x2 = 120 + (120 * (cos(angleOuter1)));
+      y2 = 120 + (120 * (sin(angleOuter1)));
+      auto x3 = 120 + (120 * (cos(angleOuter2)));
+      auto y3 = 120 + (120 * (sin(angleOuter2)));
+      it.filled_triangle(x1, y1, x2, y2, x3, y3, orange);
+    }
+    
+    auto batteryState = id(soc).state;
+    auto power = id(current).state * volt;
+    //it.printf(120, 80, id(roboto_big), TextAlign::CENTER, "%.0i%%", batteryState);
+    auto batterySymbol = "󰂑";
+    auto batteryColor = isnan(batteryState) ? white : batteryState > 75 ? green : batteryState > 50 ? yellow : batteryState > 25 ? orange : red;
+    if(batteryState > 0) {
+       batterySymbol = batteryState > 75 ? "󱊦" : batteryState > 50 ? "󱊥" : batteryState > 25 ? "󱊤" : "󰢟";
+    } else if(power <= 0) {
+       batterySymbol = batteryState > 75 ? "󱊣" : batteryState > 50 ? "󱊢" : batteryState > 25 ? "󱊡" : "󰂎";
+    }
+    it.print(120, 80, id(pictograms), batteryColor, TextAlign::CENTER, batterySymbol);
+    it.print(60, 110, id(pictograms_small), yellow, "󱐋");
+    if(isnan(power)) it.print(120, 120, id(roboto_big), TextAlign::CENTER, "???W");
+    else it.printf(120, 120, id(roboto_big), TextAlign::CENTER, "%.0fW", power);
+    it.image(62, 160, id(house), light_blue, black);
+    it.printf(120, 170, id(roboto_big), light_blue, TextAlign::CENTER, "%.1fV", volt);
+    it.print(65, 185, id(pictograms_small), orange, TextAlign::LEFT, "󰇺");
+    it.printf(120, 195, id(roboto_big), orange, TextAlign::CENTER, "%.1fV", auxVolt);
