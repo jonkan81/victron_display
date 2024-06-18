@@ -1,0 +1,313 @@
+# Features:
+# Display info from SmartShunt via VeDirect. This feature is not dependent on SignalK or a network connection
+# Publish info from Smartshunt to SignalK via MQTT
+# Listen to anchor alarm updates from SignalK via MQTT. Show visual notifications on the display. When sound notifications, trigger buzzer.
+# (Not implemented yet) Publish temperature readings to SignalK via MQTT
+
+esp32:
+  board: wemos_d1_mini32
+  #board: nodemcu-32s
+esphome:
+  name: engineroom
+
+logger:
+  #level: DEBUG
+  level: INFO
+  baud_rate: 0
+
+wifi:
+  ssid: !secret ssid
+  password: !secret wifipw
+  fast_connect: true #hidden ssid
+  
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Engineroom Fallback Hotspot"
+    password: !secret fallbackwifipw
+
+captive_portal:  
+
+mqtt:
+  broker: 192.168.42.1
+  username: !secret mqttuser
+  password: !secret mqttpw
+  on_json_message:
+    - topic: vessels/self/notifications/navigation/anchor
+      then:
+        - lambda: |-
+            if(x.containsKey("state") && strcmp(x["state"], "alarm") == 0) {
+              id(anchor).publish_state(3);
+              JsonArrayConst array = x["method"];
+              for(JsonVariantConst item : array) {
+                if(strcmp(item.as<const char*>(), "sound") == 0) { 
+                 id(buzzer).turn_on();
+                 return;
+                }
+              }
+            }
+            id(buzzer).turn_off();
+            if(x.containsKey("state") && strcmp(x["state"], "warn") == 0) {
+              id(anchor).publish_state(2);
+            }
+    - topic: vessels/self/navigation/anchor/position
+      then:
+        - lambda: |-
+            if(!x.containsKey("latitude")) {
+              id(anchor).publish_state(0);
+            } else {
+              id(anchor).publish_state(1);
+            }
+
+external_components:
+  # Waveshare 1.28" round lcd
+  - source: github://bearpawmaxim/esphome@pr3625fix
+    components: [gc9a01]
+  - source: github://KinDR007/VictronMPPT-ESPHOME@main
+
+uart:
+  id: uart_0
+  tx_pin: 1  # Not used! The communication is read-only
+  rx_pin: 3
+  baud_rate: 19200
+  rx_buffer_size: 256
+
+victron:
+  id: victron0
+  uart_id: uart_0
+
+spi:
+  mosi_pin: GPIO23
+  clk_pin: GPIO18
+
+
+font:
+  - file: "gfonts://Roboto"
+    id: roboto
+    size: 20
+  - file: "gfonts://Roboto"
+    id: roboto_big
+    size: 24
+  - file: 'materialdesignicons-webfont.ttf'
+    id: pictograms
+    size: 50
+    glyphs: [
+      '󰂎',
+      '󱊡', #F12A1
+      '󱊢', #F12A2
+      '󱊣', #F12A3
+      '󱊤',
+      '󱊥',
+      '󱊦',
+      '󰢟',
+      '󰂑',
+      '󰀱' #anchor
+      ]
+  - file: 'materialdesignicons-webfont.ttf'
+    id: pictograms_small
+    size: 24
+    glyphs: [
+      '󰇺',
+      '󱐋',
+      '󰀱' #anchor
+      ]
+
+dallas:
+  - pin: 27
+
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal Sensor"
+    id: wifisensor
+    update_interval: 60s
+    on_value:
+      then:
+       - mqtt.publish_json:
+          topic: esphome/wifi
+          payload: |-
+              root["wifistrength"] = id(wifisensor).state;
+  - platform: template
+    id: anchor
+    update_interval: never
+  - platform: victron
+    victron_id: victron0
+    battery_voltage:
+      name: "${name} battery voltage"
+      id: voltage
+      on_value:
+        then:
+         - mqtt.publish:
+             topic: vessels/self/electrical/batteries/house/voltage
+             payload: !lambda |-
+               return to_string(id(voltage).state);
+    auxiliary_battery_voltage:
+      name: "${name} auxiliary battery voltage"
+      id: aux
+      on_value:
+        then:
+         - mqtt.publish:
+             topic: vessels/self/electrical/batteries/start/voltage
+             payload: !lambda |-
+               return to_string(id(aux).state);
+    battery_current:
+      name: "${name} battery current"
+      id: current
+      on_value:
+        then:
+         - mqtt.publish:
+             topic: vessels/self/electrical/batteries/house/current
+             payload: !lambda |-
+               return to_string(id(current).state);
+    instantaneous_power:
+      name: "${name} instantaneous power"
+      id: power
+    consumed_amp_hours:
+      name: "${name} consumed amp hours"
+      id: consumed
+    state_of_charge:
+      name: "${name} state of charge"
+      id: soc
+      on_value:
+        then:
+         - mqtt.publish:
+             topic: vessels/self/electrical/batteries/house/capacity/stateOfCharge
+             payload: !lambda |-
+               return to_string(id(soc).state /100.0);
+    time_to_go:
+      name: "${name} time to go"
+      id: ttg
+      on_value:
+        then:
+         - mqtt.publish:
+             topic: vessels/self/electrical/batteries/house/timeRemaining
+             payload: !lambda |-
+               return to_string(id(ttg).state);
+
+switch:
+  - platform: gpio
+    pin:
+      number: 14
+      inverted: false
+    id: buzzer
+
+ # - platform: dallas
+ #   address: 0x1a3c01d075212228
+ #   name: "Engine room temp"
+ #   id: engineroom_temp
+ #   on_value:
+ #     then:
+ #      - mqtt.publish_json:
+ #         topic: esphome/engineroomtemp
+ #         payload: |-
+ #             root["temp"] = id(engineroom_temp).state;
+
+image:
+  - file: mdi:home-lightning-bolt-outline
+    id: house
+    resize: 24x24
+
+display:
+- platform: gc9a01
+  update_interval: 1s
+  reset_pin: GPIO26
+  cs_pin: GPIO16
+  dc_pin: GPIO19
+  rotation: 0
+  lambda: |-
+    //it.image(0, 0, id(background));
+
+    auto red = Color(255, 0, 0);
+    auto light_blue = Color(135, 237, 232);
+    auto green = Color(0, 255, 0);
+    auto yellow = Color(255, 255, 0);
+    auto orange = Color(255, 170, 43);
+    auto white = Color(255, 255, 255);
+    auto purple = Color(97, 15, 219);
+    auto grey = Color(175, 175, 175);
+    auto black = Color(0,0,0);
+
+    it.circle(120,120, 84, grey);
+
+    float angle1 = 150*PI/180;
+    float angle2 = 390*PI/180;
+    auto x1 = 120 + (84 * (cos(angle1)));
+    auto y1 = 120 + (84 * (sin(angle1)));
+    auto x2 = 120 + (84 * (cos(angle2)));
+    auto y2 = 120 + (84 * (sin(angle2)));
+    it.filled_rectangle(x1, y1,x2, y2, black);
+
+    for(int i = 8; i <= 16; i += 2) {
+       float volt = i;
+       float angle = (150+(volt - 8)/8*240)*PI/180;
+       auto x1 = 120 + (100 * (cos(angle)));
+       auto y1 = 120 + (100 * (sin(angle)));
+       auto x2 = 120 + (120 * (cos(angle)));
+       auto y2 = 120 + (120 * (sin(angle)));
+
+       it.printf(x1,y1, id(roboto),grey, TextAlign::CENTER, "%.0i", i);
+    }
+
+    for(int i = 9; i <= 15; i += 2) {
+       float volt = i;
+       float angle = (150+(volt - 8)/8*240)*PI/180;
+       auto x1 = 120 + (100 * (cos(angle)));
+       auto y1 = 120 + (100 * (sin(angle)));
+       it.filled_circle(x1, y1, 3, red);
+    }
+    
+    float volt = id(voltage).state;
+    if(isnan(volt) || volt < 8) {
+      volt = isnan(volt) ? 0 : volt;
+    } else {
+      float angle = (150+(volt - 8)/8*240)*PI/180;
+      float angleOuter1 = (150+(volt - 7.95)/8*240)*PI/180;
+      float angleOuter2 = (150+(volt - 8.05)/8*240)*PI/180;
+      x1 = 120 + (83 * (cos(angle)));
+      y1 = 120 + (83 * (sin(angle)));
+      x2 = 120 + (120 * (cos(angleOuter1)));
+      y2 = 120 + (120 * (sin(angleOuter1)));
+      auto x3 = 120 + (120 * (cos(angleOuter2)));
+      auto y3 = 120 + (120 * (sin(angleOuter2)));
+      it.filled_triangle(x1, y1, x2, y2, x3, y3, light_blue);
+    }
+
+    float auxVolt = id(aux).state;
+    if(isnan(auxVolt) || auxVolt < 8) {
+       auxVolt = isnan(auxVolt) ? 0 : auxVolt;
+    } else {
+      auxVolt = isnan(auxVolt) ? 0 : auxVolt;
+      float angle = (150+(auxVolt - 8)/8*240)*PI/180;
+      float angleOuter1 = (150+(auxVolt - 7.95)/8*240)*PI/180;
+      float angleOuter2 = (150+(auxVolt - 8.05)/8*240)*PI/180;
+      x1 = 120 + (83 * (cos(angle)));
+      y1 = 120 + (83 * (sin(angle)));
+      x2 = 120 + (120 * (cos(angleOuter1)));
+      y2 = 120 + (120 * (sin(angleOuter1)));
+      auto x3 = 120 + (120 * (cos(angleOuter2)));
+      auto y3 = 120 + (120 * (sin(angleOuter2)));
+      it.filled_triangle(x1, y1, x2, y2, x3, y3, orange);
+    }
+    
+    auto anchorState = id(anchor).state;
+    auto batteryState = id(soc).state;
+    auto power = id(current).state * volt;
+    //it.printf(120, 80, id(roboto_big), TextAlign::CENTER, "%.0i%%", batteryState);
+    auto batterySymbol = "󰂑";
+    auto batteryColor = isnan(batteryState) ? white : batteryState > 75 ? green : batteryState > 50 ? yellow : batteryState > 25 ? orange : red;
+    if(power > 0) {
+       batterySymbol = batteryState > 75 ? "󱊦" : batteryState > 50 ? "󱊥" : batteryState > 25 ? "󱊤" : "󰢟";
+    } else if(power <= 0) {
+       batterySymbol = batteryState > 75 ? "󱊣" : batteryState > 50 ? "󱊢" : batteryState > 25 ? "󱊡" : "󰂎";
+    }
+    it.print(120, 80, id(pictograms), batteryColor, TextAlign::CENTER, batterySymbol);
+    if(anchorState > 1) {
+      it.print(120, 80, id(pictograms), anchorState == 2 ? yellow : red, TextAlign::CENTER, "󰀱");
+    } else if(anchorState == 1) {
+      it.print(90, 80, id(pictograms_small), green, "󰀱");
+    }
+    it.print(60, 110, id(pictograms_small), yellow, "󱐋");
+    if(isnan(power)) it.print(120, 120, id(roboto_big), TextAlign::CENTER, "???W");
+    else it.printf(120, 120, id(roboto_big), TextAlign::CENTER, "%.0fW", power);
+    it.image(62, 160, id(house), light_blue, black);
+    it.printf(120, 170, id(roboto_big), light_blue, TextAlign::CENTER, "%.1fV", volt);
+    it.print(65, 185, id(pictograms_small), orange, TextAlign::LEFT, "󰇺");
+    it.printf(120, 195, id(roboto_big), orange, TextAlign::CENTER, "%.1fV", auxVolt);
